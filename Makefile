@@ -1,35 +1,25 @@
-#ifndef RBTREE_H
-#define RBTREE_H
-#include <stddef.h>
-typedef struct rbtree rbtree_t;
-typedef void (*rb_value_free_fn)(void *value);
-/* Returns NULL on allocation failure.
-* value_free may be NULL (values not owned). */
-rbtree_t *rb_create(rb_value_free_fn value_free);
-/* Mutation 2: node storage drawn from an internal slab pool. */
-rbtree_t *rb_create_pooled(rb_value_free_fn value_free);
-/* Copies key (tree owns the copy).
-* Takes ownership of value ONLY on success.
-* Overwriting an existing key frees the old value via value_free.
-* Returns 0 on success, -1 on allocation failure (tree unchanged, value NOT
-* consumed; caller still owns it). */
-int rb_insert(rbtree_t *t, const char *key, void *value);
-/* Returns the value, or NULL if absent. Tree retains ownership. */
-void *rb_find(const rbtree_t *t, const char *key);
-/* Removes key; frees the key copy and the value.
-* Returns 0, or -1 if absent. */
-int rb_delete(rbtree_t *t, const char *key);
-size_t rb_size(const rbtree_t *t);
-/* In-order. Mutation 3: O(1) auxiliary space, no recursion. */
-void rb_foreach(const rbtree_t *t,
-void (*fn)(const char *key, void *value, void *ctx),
-void *ctx);
-/* Returns 0 iff all red-black invariants hold
-* (see the baseline section). */
-int rb_validate(const rbtree_t *t);
-/* Frees all nodes, key copies, and (if owned) values.
-* Mutation 3: O(1) auxiliary space, no recursion. NULL-safe. */
-void rb_destroy(rbtree_t *t);
-/* Mutation 4 (The Reach): O(1) copy-on-write snapshot.
-* NULL on alloc failure. */
-rbtree_t *rb_snapshot(rbtree_t *t);
+CC := gcc
+CFLAGS := -std=c23 -Wall -Wextra -Werror -g -O1 -Iinclude
+SRC := src/rbtree.c src/pool.c
+TSRC := tests/test_rbtree.c tests/fault_alloc.c
+BIN := build/test_rbtree
+FUZZBIN := build/fuzz
+all: $(BIN) $(FUZZBIN)
+$(BIN): $(SRC) $(TSRC) include/rbtree.h
+@mkdir -p build
+$(CC) $(CFLAGS) $(SRC) $(TSRC) -o $@ -lpthread
+$(FUZZBIN): $(SRC) tests/fuzz.c tests/fault_alloc.c include/rbtree.h
+@mkdir -p build
+$(CC) $(CFLAGS) $(SRC) tests/fuzz.c tests/fault_alloc.c -o $@ -lpthread
+test: $(BIN) $(FUZZBIN)
+./$(BIN) && ./$(FUZZBIN) 100000
+asan: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
+asan: clean test
+memcheck: all
+valgrind --leak-check=full --show-leak-kinds=all \
+--error-exitcode=1 ./$(BIN)
+valgrind --leak-check=full --show-leak-kinds=all \
+--error-exitcode=1 ./$(FUZZBIN) 20000
+clean:
+rm -rf build
+.PHONY: all test asan memcheck clean
