@@ -21,7 +21,9 @@ test: $(BIN) $(FUZZBIN) $(FAULTBIN)
 	./$(BIN) && ./$(FUZZBIN) 100000 && ./$(FAULTBIN)
 asan: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: clean test
-memcheck: all
+memcheck:
+	$(MAKE) clean
+	$(MAKE) all
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(BIN)
 	valgrind --leak-check=full --show-leak-kinds=all \
