@@ -14,6 +14,7 @@
 #define CHECK(cond)                                                          \
 	do {                                                                 \
 		if (!(cond)) {                                               \
+			fflush(stdout);                                      \
 			fprintf(stderr, "%s:%d: CHECK failed: %s\n",         \
 				__FILE__, __LINE__, #cond);                  \
 			exit(1);                                             \

@@ -1,4 +1,5 @@
 #include "rbtree.h"
+#include "fault_alloc.h"
 
 #include <stdlib.h>
 #include <string.h>
@@ -24,7 +25,7 @@ struct rbtree {
 static char *dup_key(const char *key)
 {
 	size_t len = strlen(key) + 1;
-	char *copy = malloc(len);
+	char *copy = rb_malloc(len);
 	if (copy == NULL) {
 		return NULL;
 	}
@@ -34,7 +35,7 @@ static char *dup_key(const char *key)
 
 rbtree_t *rb_create(rb_value_free_fn value_free)
 {
-	rbtree_t *t = malloc(sizeof *t);
+	rbtree_t *t = rb_malloc(sizeof *t);
 	if (t == NULL) {
 		return NULL;
 	}
@@ -158,7 +159,7 @@ int rb_insert(rbtree_t *t, const char *key, void *value)
 		cur = (cmp < 0) ? cur->left : cur->right;
 	}
 
-	node = malloc(sizeof *node);
+	node = rb_malloc(sizeof *node);
 	if (node == NULL) {
 		goto fail;
 	}
@@ -187,7 +188,7 @@ int rb_insert(rbtree_t *t, const char *key, void *value)
 	return 0;
 
 fail_node:
-	free(node);
+	rb_free(node);
 fail:
 	return -1;
 }
@@ -332,8 +333,8 @@ int rb_delete(rbtree_t *t, const char *key)
 	if (t->value_free != NULL && z->value != NULL) {
 		t->value_free(z->value);
 	}
-	free(z->key);
-	free(z);
+	rb_free(z->key);
+	rb_free(z);
 	t->size--;
 	return 0;
 }
@@ -417,8 +418,8 @@ static void free_subtree(rbtree_t *t, rbnode_t *node)
 	if (t->value_free != NULL && node->value != NULL) {
 		t->value_free(node->value);
 	}
-	free(node->key);
-	free(node);
+	rb_free(node->key);
+	rb_free(node);
 }
 
 void rb_destroy(rbtree_t *t)
@@ -427,5 +428,5 @@ void rb_destroy(rbtree_t *t)
 		return;
 	}
 	free_subtree(t, t->root);
-	free(t);
+	rb_free(t);
 }
