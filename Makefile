@@ -18,7 +18,7 @@ $(FAULTBIN): $(SRC) tests/test_fault.c tests/fault_alloc.c include/rbtree.h test
 fault: $(FAULTBIN)
 	./$(FAULTBIN)
 test: $(BIN) $(FUZZBIN) $(FAULTBIN)
-	./$(BIN) && ./$(FUZZBIN) 100000 && ./$(FAULTBIN)
+	./$(BIN) && ./$(FUZZBIN) 100000 12345 && ./$(FAULTBIN)
 asan: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: clean test
 memcheck:
@@ -27,7 +27,7 @@ memcheck:
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(BIN)
 	valgrind --leak-check=full --show-leak-kinds=all \
-	--error-exitcode=1 ./$(FUZZBIN) 20000
+	--error-exitcode=1 ./$(FUZZBIN) 20000 12345
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(FAULTBIN)
 clean:
