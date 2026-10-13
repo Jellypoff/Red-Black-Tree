@@ -22,7 +22,7 @@ $(POOLBIN): $(SRC) tests/test_pool.c tests/fault_alloc.c include/rbtree.h tests/
 fault: $(FAULTBIN)
 	./$(FAULTBIN)
 test: $(BIN) $(FUZZBIN) $(FAULTBIN) $(POOLBIN)
-	./$(BIN) && ./$(FUZZBIN) 100000 12345 && ./$(FAULTBIN) && ./$(POOLBIN)
+	./$(BIN) && ./$(FUZZBIN) 100000 12345 && ./$(FUZZBIN) 100000 12345 pooled && ./$(FAULTBIN) && ./$(POOLBIN)
 asan: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: clean test
 memcheck:
@@ -32,6 +32,8 @@ memcheck:
 	--error-exitcode=1 ./$(BIN)
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(FUZZBIN) 20000 12345
+	valgrind --leak-check=full --show-leak-kinds=all \
+	--error-exitcode=1 ./$(FUZZBIN) 20000 12345 pooled
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(FAULTBIN)
 	valgrind --leak-check=full --show-leak-kinds=all \

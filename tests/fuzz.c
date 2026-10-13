@@ -1,5 +1,5 @@
 /* Random inserts/finds/deletes checked against a reference model.
- * Usage: fuzz <op-count> [seed] */
+ * Usage: fuzz <op-count> [seed] [pooled] */
 #include "rbtree.h"
 
 #include <assert.h>
@@ -42,18 +42,20 @@ static void inorder_check_cb(const char *key, void *value, void *ctx)
 int main(int argc, char **argv)
 {
 	if (argc < 2) {
-		fprintf(stderr, "usage: %s <op-count> [seed]\n", argv[0]);
+		fprintf(stderr, "usage: %s <op-count> [seed] [pooled]\n", argv[0]);
 		return 1;
 	}
 	long ops = atol(argv[1]);
 	unsigned int seed = (argc >= 3) ? (unsigned int)strtoul(argv[2], NULL, 10)
 					 : (unsigned int)time(NULL);
-	printf("fuzz seed: %u\n", seed);
+	int pooled = argc >= 4 && strcmp(argv[3], "pooled") == 0;
+	const char *mode = pooled ? "rb_create_pooled" : "rb_create";
+	printf("fuzz seed: %u (%s)\n", seed, mode);
 	srand(seed);
 
 	build_pool();
 
-	rbtree_t *t = rb_create(free);
+	rbtree_t *t = pooled ? rb_create_pooled(free) : rb_create(free);
 	assert(t != NULL);
 
 	/* invariant: after each op, the tree agrees with model_present/model_value
@@ -114,6 +116,7 @@ int main(int argc, char **argv)
 	assert((size_t)ctx.count == expected_size);
 
 	rb_destroy(t);
-	printf("fuzz: %ld ops, %zu final keys, all checks passed\n", ops, expected_size);
+	printf("fuzz (%s): %ld ops, %zu final keys, all checks passed\n", mode,
+	       ops, expected_size);
 	return 0;
 }

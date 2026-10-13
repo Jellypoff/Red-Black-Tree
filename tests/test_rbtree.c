@@ -6,6 +6,8 @@
 #include <string.h>
 
 static int free_count = 0;
+/* M2: the whole A1 suite runs once per constructor; main switches this. */
+static rbtree_t *(*make_tree)(rb_value_free_fn value_free) = rb_create;
 
 static void count_free(void *value)
 {
@@ -23,7 +25,7 @@ static int *make_int(int n)
 
 static void test_create_destroy(void)
 {
-	rbtree_t *t = rb_create(NULL);
+	rbtree_t *t = make_tree(NULL);
 	assert(t != NULL);
 	assert(rb_size(t) == 0);
 	rb_destroy(t);
@@ -33,7 +35,7 @@ static void test_create_destroy(void)
 
 static void test_insert_find_basic(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 	free_count = 0;
 
@@ -55,7 +57,7 @@ static void test_insert_find_basic(void)
 
 static void test_find_missing(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "one", make_int(1)) == 0);
@@ -68,7 +70,7 @@ static void test_find_missing(void)
 
 static void test_overwrite(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 	free_count = 0;
 
@@ -96,7 +98,7 @@ static void test_overwrite(void)
 
 static void test_size_tracking(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	const char *keys[] = { "m", "d", "z", "a", "f", "y" };
@@ -133,7 +135,7 @@ static void assert_three_keys_findable(rbtree_t *t, const char *k0, int v0,
 
 static void test_stale_root_left_rotation(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "a", make_int(1)) == 0);
@@ -148,7 +150,7 @@ static void test_stale_root_left_rotation(void)
 
 static void test_stale_root_right_rotation(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "c", make_int(3)) == 0);
@@ -163,7 +165,7 @@ static void test_stale_root_right_rotation(void)
 
 static void test_stale_root_left_right_zigzag(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "c", make_int(3)) == 0);
@@ -178,7 +180,7 @@ static void test_stale_root_left_right_zigzag(void)
 
 static void test_stale_root_right_left_zigzag(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "a", make_int(1)) == 0);
@@ -193,7 +195,7 @@ static void test_stale_root_right_left_zigzag(void)
 
 static void test_validate_empty_tree(void)
 {
-	rbtree_t *t = rb_create(NULL);
+	rbtree_t *t = make_tree(NULL);
 	assert(t != NULL);
 
 	assert(rb_validate(t) == 0);
@@ -204,7 +206,7 @@ static void test_validate_empty_tree(void)
 
 static void test_validate_single_insert(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "only", make_int(1)) == 0);
@@ -225,7 +227,7 @@ static void test_validate_after_rotations(void)
 
 	/* invariant: every sequence inserted so far has left the tree valid */
 	for (size_t s = 0; s < sizeof sequences / sizeof sequences[0]; s++) {
-		rbtree_t *t = rb_create(count_free);
+		rbtree_t *t = make_tree(count_free);
 		assert(t != NULL);
 
 		for (size_t i = 0; i < 3; i++) {
@@ -242,7 +244,7 @@ static void test_validate_ascending_run(void)
 {
 	static const char *keys[] = { "a", "b", "c", "d", "e", "f", "g",
 				       "h", "i", "j", "k", "l", "m" };
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	/* invariant: after each insert of a strictly increasing key, the
@@ -265,7 +267,7 @@ static void count_keys_cb(const char *key, void *value, void *ctx)
 
 static void test_foreach_empty(void)
 {
-	rbtree_t *t = rb_create(NULL);
+	rbtree_t *t = make_tree(NULL);
 	assert(t != NULL);
 
 	int count = 0;
@@ -290,7 +292,7 @@ static void collect_keys_cb(const char *key, void *value, void *ctx)
 
 static void test_foreach_inorder(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	const char *keys[] = { "m", "d", "z", "a", "f", "y", "b" };
@@ -333,7 +335,7 @@ static void collect_kv_cb(const char *key, void *value, void *ctx)
 
 static void test_foreach_values(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_insert(t, "beta", make_int(20)) == 0);
@@ -396,7 +398,7 @@ static void test_delete_cases(void)
 	 * valid and correctly sized before moving to the next case */
 	for (size_t i = 0; i < n; i++) {
 		const delete_case_t *tc = &delete_cases[i];
-		rbtree_t *t = rb_create(count_free);
+		rbtree_t *t = make_tree(count_free);
 		assert(t != NULL);
 
 		for (size_t k = 0; k < tc->insert_count; k++) {
@@ -434,7 +436,7 @@ static void test_delete_cases(void)
 
 static void test_delete_empty_tree(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_delete(t, "missing") == -1);
@@ -447,7 +449,7 @@ static void test_delete_empty_tree(void)
 
 static void test_find_empty_tree(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 
 	assert(rb_find(t, "missing") == NULL);
@@ -459,7 +461,7 @@ static void test_find_empty_tree(void)
 
 static void test_empty_after_deletes(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 	free_count = 0;
 
@@ -496,7 +498,7 @@ static void test_empty_after_deletes(void)
 
 static void test_single_node_lifecycle(void)
 {
-	rbtree_t *t = rb_create(count_free);
+	rbtree_t *t = make_tree(count_free);
 	assert(t != NULL);
 	free_count = 0;
 
@@ -520,8 +522,9 @@ static void test_single_node_lifecycle(void)
 	printf("test_single_node_lifecycle passed\n");
 }
 
-int main(void)
+static void run_suite(const char *ctor_name)
 {
+	printf("== A1 suite on %s ==\n", ctor_name);
 	test_create_destroy();
 	test_insert_find_basic();
 	test_find_missing();
@@ -543,6 +546,14 @@ int main(void)
 	test_find_empty_tree();
 	test_empty_after_deletes();
 	test_single_node_lifecycle();
+}
+
+int main(void)
+{
+	make_tree = rb_create;
+	run_suite("rb_create");
+	make_tree = rb_create_pooled;
+	run_suite("rb_create_pooled");
 	printf("All tests passed\n");
 	return 0;
 }
