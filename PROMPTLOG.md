@@ -40,3 +40,8 @@ Notes: The review found 2 real bugs and a false positive.
 1. The sweep never pins baseline to 401. If dup_key bypassed the seam again, the baseline would drop to 201 and the check would still pass.
 2. The injector has no live-allocation count, so make fault alone can’t see leaks. Your mutation check should already have shown this, since the sanitizers catch the leak and make fault alone passes.
 3. False positive: The spec puts rb_malloc/rb_free in tests/fault_alloc.h, and Appendix B’s Makefile links tests/fault_alloc.c into every binary.
+
+Episode 4
+Prompt: Implement only the M2 slice "slab carving + intrusive free list, O(1) alloc/free", tests first. Touch only src/pool.c, src/pool.h, and tests/test_pool.c. Do not touch src/rbtree.c, include/rbtree.h, or the tree tests. No poisoning yet (that is the next slice).
+
+Read only src/pool.h, src/pool.c, tests/test_pool.c, tests/fault_alloc.h, and the M2 decisions in DEVLOG.md (alignment, in-band header, free_objs definition).
