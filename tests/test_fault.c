@@ -4,6 +4,7 @@
  * Usage: test_fault */
 #include "fault_alloc.h"
 #include "rbtree.h"
+#include "rbtree_internal.h"
 
 #include <stdio.h>
 #include <stdlib.h>
@@ -26,7 +27,7 @@
 #define N_DELETES 100
 /* gcd(73, N_KEYS) == 1, so i -> (i * 73) % N_KEYS is a bijection. */
 #define PERM_STEP 73
-/* Most rb_malloc calls one rb_insert makes (node + key copy). A failed
+/* Most rb_malloc calls one rb_insert makes (node or slab + key copy). A failed
  * insert's calls still count toward the total and its retry repeats them, so
  * an injected run may exceed the unarmed baseline by at most this much. */
 #define MAX_ALLOCS_PER_INSERT 2
@@ -46,6 +47,13 @@ typedef struct {
 	int create_failed;
 	int insert_failed;
 } scen_result_t;
+
+/* What one implementation's sweep must report; each ctor passes its own. */
+typedef struct {
+	long baseline;
+	long create_failures;
+	long insert_failures;
+} sweep_expect_t;
 
 /* "k" + any int + NUL fits in 16, so -Wformat-truncation stays quiet even
  * when the sanitizer build loses the i < N_KEYS range. */
@@ -105,6 +113,19 @@ static void check_model(const rbtree_t *t, const model_t *m)
 	}
 }
 
+/* Pooled trees only: every live slot is a tree node, and the pool invariant
+ * holds. A plain tree has no pool, so this is a no-op for it. */
+static void check_pool(const rbtree_t *t)
+{
+	size_t slabs, live, free_objs, per;
+	if (rb_tree_pool_stats(t, &slabs, &live, &free_objs, &per) != 0) {
+		return;
+	}
+	size_t size = rb_size(t);
+	CHECK(live == size);
+	CHECK(live + free_objs == slabs * per);
+}
+
 /* Shared check after every failed op: valid tree, unchanged size, failed key
  * as before, every model key with its original value, destructor not run. */
 static void assert_unchanged(const rbtree_t *t, const model_t *m, int idx,
@@ -127,6 +148,7 @@ static void do_insert(rbtree_t *t, model_t *m, int idx, scen_result_t *r)
 		r->insert_failed++;
 		CHECK(*v == id); /* value intact: ownership never moved */
 		assert_unchanged(t, m, idx, fc0);
+		check_pool(t);
 		/* the injector is one-shot, so retrying the same value succeeds */
 		rc = rb_insert(t, keys[idx], v);
 	}
@@ -143,6 +165,7 @@ static void do_insert(rbtree_t *t, model_t *m, int idx, scen_result_t *r)
 	CHECK(size == m->count);
 	void *found = rb_find(t, keys[idx]);
 	CHECK(found == v);
+	check_pool(t);
 }
 
 static void do_delete(rbtree_t *t, model_t *m, int idx)
@@ -159,6 +182,7 @@ static void do_delete(rbtree_t *t, model_t *m, int idx)
 		m->count--;
 	}
 	check_key(t, m, idx);
+	check_pool(t);
 }
 
 /* Fixed scenario; ctor lets M2 rerun it with rb_create_pooled. Resets all
@@ -183,6 +207,7 @@ static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 		return;
 	}
 	check_model(t, &m);
+	check_pool(t);
 
 	/* invariant: the tree agrees with the model after each op */
 	for (int i = 0; i < N_KEYS; i++) {
@@ -201,9 +226,10 @@ static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 	CHECK(fault_alloc_live() == live_at_start);
 }
 
-/* expected_baseline: rb_malloc calls one unarmed scenario makes with ctor;
- * each implementation (plain, pooled) passes its own number. */
-static void sweep(tree_ctor_fn ctor, const char *name, long expected_baseline)
+/* exp.baseline: rb_malloc calls one unarmed scenario makes with ctor;
+ * exp.create_failures / exp.insert_failures: how those calls split between
+ * the constructor and fresh inserts. Each implementation passes its own. */
+static void sweep(tree_ctor_fn ctor, const char *name, sweep_expect_t exp)
 {
 	scen_result_t r;
 
@@ -213,7 +239,7 @@ static void sweep(tree_ctor_fn ctor, const char *name, long expected_baseline)
 	CHECK(r.create_failed == 0 && r.insert_failed == 0);
 	/* pins the allocation profile: an extra or missing rb_malloc call in
 	 * src/ changes this before it can hide from the sweep */
-	CHECK(baseline == expected_baseline);
+	CHECK(baseline == exp.baseline);
 
 	/* injected = number of k with ran >= k, i.e. the k-th call happened */
 	long injected = 0;
@@ -253,18 +279,45 @@ static void sweep(tree_ctor_fn ctor, const char *name, long expected_baseline)
 	CHECK(create_failures >= 1 && insert_failures >= 1);
 	/* every one of the baseline allocation points was reached and failed */
 	CHECK(injected == baseline);
-	/* only the scenario's first rb_malloc belongs to the constructor */
-	CHECK(create_failures == 1);
-	/* the rest are node + key copy for each of the N_KEYS fresh inserts;
-	 * overwrites and deletes allocate nothing */
-	CHECK(insert_failures == 2 * N_KEYS);
+	/* the scenario's first rb_malloc calls belong to the constructor */
+	CHECK(create_failures == exp.create_failures);
+	/* the rest belong to the N_KEYS fresh inserts; overwrites and deletes
+	 * allocate nothing */
+	CHECK(insert_failures == exp.insert_failures);
+}
+
+/* Slots per slab of a pooled tree's node pool, read from a throwaway tree
+ * and pinned so a layout change fails here with a clear message. */
+static size_t pooled_objs_per_slab(void)
+{
+	size_t slabs, live, free_objs, per;
+	rbtree_t *probe = rb_create_pooled(NULL);
+	CHECK(probe != NULL);
+	int rc = rb_tree_pool_stats(probe, &slabs, &live, &free_objs, &per);
+	CHECK(rc == 0);
+	rb_destroy(probe);
+	if (per != 85) {
+		fprintf(stderr, "pooled layout changed: objs_per_slab=%zu, "
+			"expected 85 (48-byte node, 16-byte slots, 16-byte "
+			"header)\n", per);
+	}
+	CHECK(per == 85);
+	return per;
 }
 
 int main(void)
 {
 	build_keys();
 	/* one tree, plus a node and a key copy per fresh insert: 1 + 2 * 200 */
-	sweep(rb_create, "rb_create", 1 + 2 * N_KEYS);
+	sweep(rb_create, "rb_create",
+	      (sweep_expect_t){ 1 + 2 * N_KEYS, 1, 2 * N_KEYS });
+	/* tree + pool struct, then a key copy per fresh insert plus one slab per
+	 * objs_per_slab nodes; all N_KEYS inserts precede the first delete, so
+	 * slabs = ceil(N_KEYS / objs_per_slab) = ceil(200 / 85) = 3 -> 205 */
+	size_t per = pooled_objs_per_slab();
+	long slabs = (long)((N_KEYS + per - 1) / per);
+	sweep(rb_create_pooled, "rb_create_pooled",
+	      (sweep_expect_t){ 2 + N_KEYS + slabs, 2, N_KEYS + slabs });
 	printf("All fault sweeps passed\n");
 	return 0;
 }
