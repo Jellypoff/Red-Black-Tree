@@ -45,3 +45,15 @@ Episode 4
 Prompt: Implement only the M2 slice "slab carving + intrusive free list, O(1) alloc/free", tests first. Touch only src/pool.c, src/pool.h, and tests/test_pool.c. Do not touch src/rbtree.c, include/rbtree.h, or the tree tests. No poisoning yet (that is the next slice).
 
 Read only src/pool.h, src/pool.c, tests/test_pool.c, tests/fault_alloc.h, and the M2 decisions in DEVLOG.md (alignment, in-band header, free_objs definition).
+
+Notes: This is slice 2 of M2. Telling Claude where to look is very useful for conserving tokens and at this point Claude it seems that Claude knows to build on the foundations that I've layed and just need to give it clarifying questions.
+
+Episode 5
+Prompt: Implement only the M2 slice "0xDD poisoning in debug; link written over the front of the poison", tests first. Touch only src/pool.c and tests/test_pool.c. Do not touch src/pool.h's API, src/rbtree.c, or include/rbtree.h.
+Decision (flag it if you disagree, don't silently change it): "debug build" means NDEBUG is not defined, matching the assert in pool_check. Define POOL_POISON_BYTE 0xDD. No Makefile change.
+
+Notes: Pushed back on what I got from Claude. In the first plan, Claude said that padding was poisoned and the test couldn't detect it. I pushed back with : 
+Approve with two additions:
+1. Add a second poison test case where the stride exceeds obj_size (pool_create(1) gives stride 16; also try pool_create(20), stride 32; read the stride from pool_geometry). After pool_free, bytes [sizeof(void *), stride) must all be 0xDD. Add a third mutation check: poison fewer bytes than the stride, and show the new test fails.
+2. Verify the -DNDEBUG claim once with a one-off build in the WSL copy : show that it compiles under -Wall -Wextra -Werror and the pool tests pass.
+Otherwise proceed as planned. Show the diff and stop. Don't commit, I'll do that.

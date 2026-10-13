@@ -328,6 +328,93 @@ static void test_slab_failure(void)
 	printf("test_slab_failure passed\n");
 }
 
+/* The spec's debug poison, stated here rather than taken from pool.c, so
+ * the test does not trust the implementation's constant. */
+#define EXPECT_POISON 0xDD
+
+static size_t stride_of(size_t obj_size)
+{
+	pool_geom_t g;
+	int rc = pool_geometry(obj_size, &g);
+	CHECK(rc == 0);
+	return g.stride;
+}
+
+#ifndef NDEBUG
+/* A dead slot: its first pointer-sized bytes are the free-list link, and
+ * every byte after the link up to the stride is poison. Reading a freed
+ * slot is deliberate here; the slab is still live, so ASan and valgrind
+ * allow it. */
+static void check_dead_slot(const void *slot, size_t stride,
+			    const void *expect_link)
+{
+	void *link;
+	memcpy(&link, slot, sizeof link);
+	CHECK(link == expect_link);
+	const unsigned char *b = slot;
+	/* invariant: bytes [sizeof(void *), i) are all poison */
+	for (size_t i = sizeof(void *); i < stride; i++) {
+		CHECK(b[i] == EXPECT_POISON);
+	}
+}
+#endif
+
+/* In a -DNDEBUG build nothing is poisoned, so only reuse is checked. */
+static void test_poison_on_free(void)
+{
+	size_t stride = stride_of(OBJ);
+	(void)stride; /* unused when NDEBUG compiles the poison checks out */
+	rb_pool_t *p = pool_create(OBJ);
+	CHECK(p != NULL);
+	void *a = pool_alloc(p);
+	void *b = pool_alloc(p);
+	CHECK(a != NULL && b != NULL);
+	memset(a, 0x11, OBJ);
+	memset(b, 0x11, OBJ);
+
+	pool_free(p, a);
+#ifndef NDEBUG
+	check_dead_slot(a, stride, NULL); /* only dead slot: end of list */
+#endif
+	pool_free(p, b);
+#ifndef NDEBUG
+	check_dead_slot(b, stride, a);    /* link written over the poison */
+	check_dead_slot(a, stride, NULL); /* untouched by b's free */
+#endif
+
+	void *c = pool_alloc(p);
+	void *d = pool_alloc(p);
+	CHECK(c == b && d == a);
+	check_inv(p);
+	pool_destroy(p);
+	printf("test_poison_on_free passed\n");
+}
+
+/* Sizes whose stride exceeds obj_size: the padding past the object must be
+ * poisoned too, not just the object's own bytes. */
+static void test_poison_stride_padding(void)
+{
+	static const size_t sizes[] = { 1, 20 }; /* strides 16 and 32 */
+	size_t n = sizeof sizes / sizeof sizes[0];
+	/* invariant: sizes[0..i-1] poisoned their whole stride on free */
+	for (size_t i = 0; i < n; i++) {
+		size_t stride = stride_of(sizes[i]);
+		CHECK(stride > sizes[i]);
+		rb_pool_t *p = pool_create(sizes[i]);
+		CHECK(p != NULL);
+		void *a = pool_alloc(p);
+		CHECK(a != NULL);
+		/* white-box: mark the padding too, so unpoisoned bytes show */
+		memset(a, 0x11, stride);
+		pool_free(p, a);
+#ifndef NDEBUG
+		check_dead_slot(a, stride, NULL);
+#endif
+		pool_destroy(p);
+	}
+	printf("test_poison_stride_padding passed\n");
+}
+
 int main(void)
 {
 	test_geometry();
@@ -337,6 +424,8 @@ int main(void)
 	test_lifo_reuse();
 	test_stress_and_destroy_live();
 	test_slab_failure();
+	test_poison_on_free();
+	test_poison_stride_padding();
 	printf("All pool tests passed\n");
 	return 0;
 }

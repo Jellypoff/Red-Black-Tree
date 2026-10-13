@@ -29,8 +29,18 @@
  * the pool unchanged. No path loops, so alloc and free are O(1).
  *
  * Free list: intrusive. A dead slot's first sizeof(void *) bytes hold the
- * link to the next dead slot (struct free_slot); the rest of the slot is
- * unused. Slots return LIFO and may wander between slabs.
+ * link to the next dead slot (struct free_slot). Slots return LIFO and may
+ * wander between slabs.
+ *
+ * Poisoning (debug builds, i.e. NDEBUG not defined, like pool_check): on
+ * free, the whole slot, padding included, is filled with POOL_POISON_BYTE
+ * first, and only then is the link written over its front. The link owns
+ * the first sizeof(void *) bytes; the poison owns the rest. The other order
+ * would overwrite the link and lose the list. ASan sees the slab as one live
+ * block, so a stale pointer into a dead slot is invisible to it; poisoning
+ * makes such a reader see 0xDD past the link instead of the old node, and a
+ * pointer into the pool in the link. Cost is O(stride) per free, a constant
+ * of at most one slab, so pool_free stays O(1) in the number of objects.
  *
  * Stats: free_objs = free-list length + slots not carved yet, so
  * live + free_objs == slabs * objs_per_slab after every operation. */
@@ -39,8 +49,10 @@
 #include "fault_alloc.h"
 
 #include <assert.h>
+#include <string.h>
 
 #define POOL_ALIGN alignof(max_align_t)
+#define POOL_POISON_BYTE 0xDD
 
 struct slab_hdr {
 	struct slab_hdr *next;
@@ -99,6 +111,10 @@ static void pool_check(const rb_pool_t *p)
 
 static void freelist_push(rb_pool_t *p, void *obj)
 {
+#ifndef NDEBUG
+	/* poison first; the link below then claims the front of the slot */
+	memset(obj, POOL_POISON_BYTE, p->g.stride);
+#endif
 	struct free_slot *s = obj;
 	s->next = p->free;
 	p->free = s;
