@@ -13,5 +13,8 @@ void fault_alloc_arm(long n);
 void fault_alloc_disarm(void);
 /* Cumulative rb_malloc calls since program start; never reset. */
 long fault_alloc_total(void);
+/* Blocks currently held: successful rb_malloc calls minus rb_free calls with
+ * a non-NULL pointer. Failed allocations and rb_free(NULL) do not count. */
+long fault_alloc_live(void);
 
 #endif

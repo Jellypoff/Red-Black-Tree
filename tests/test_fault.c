@@ -60,7 +60,7 @@ static void count_free(void *value)
 }
 
 /* Test values use plain malloc, never rb_malloc, so they never consume an
- * injection point or show up in fault_alloc_total(). */
+ * injection point or show up in fault_alloc_total() or fault_alloc_live(). */
 static int *make_int(int n)
 {
 	int *p = malloc(sizeof *p);
@@ -165,6 +165,8 @@ static void do_delete(rbtree_t *t, model_t *m, int idx)
  * test state first so every run is independent of the previous one. */
 static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 {
+	/* every block the scenario takes from rb_malloc must be returned */
+	long live_at_start = fault_alloc_live();
 	model_t m;
 	memset(&m, 0, sizeof m);
 	free_count = 0;
@@ -177,6 +179,7 @@ static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 		r->create_failed = 1;
 		rb_destroy(NULL); /* must be safe */
 		CHECK(free_count == 0);
+		CHECK(fault_alloc_live() == live_at_start);
 		return;
 	}
 	check_model(t, &m);
@@ -195,6 +198,7 @@ static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 	check_model(t, &m);
 	rb_destroy(t);
 	CHECK(free_count == VALUES_HANDED_TO_TREE);
+	CHECK(fault_alloc_live() == live_at_start);
 }
 
 /* expected_baseline: rb_malloc calls one unarmed scenario makes with ctor;

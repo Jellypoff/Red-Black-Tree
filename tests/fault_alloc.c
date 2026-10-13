@@ -8,6 +8,7 @@
 static long total = 0;     /* cumulative rb_malloc calls; never reset */
 static int armed = 0;
 static long countdown = 0; /* calls remaining until the injected failure */
+static long live = 0;      /* successful rb_malloc minus rb_free(non-NULL) */
 
 void *rb_malloc(size_t n)
 {
@@ -16,11 +17,18 @@ void *rb_malloc(size_t n)
 		armed = 0;
 		return NULL;
 	}
-	return malloc(n);
+	void *p = malloc(n);
+	if (p != NULL) {
+		live++;
+	}
+	return p;
 }
 
 void rb_free(void *p)
 {
+	if (p != NULL) {
+		live--;
+	}
 	free(p);
 }
 
@@ -39,4 +47,9 @@ void fault_alloc_disarm(void)
 long fault_alloc_total(void)
 {
 	return total;
+}
+
+long fault_alloc_live(void)
+{
+	return live;
 }
