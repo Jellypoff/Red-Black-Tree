@@ -197,7 +197,9 @@ static void run_scenario(tree_ctor_fn ctor, scen_result_t *r)
 	CHECK(free_count == VALUES_HANDED_TO_TREE);
 }
 
-static void sweep(tree_ctor_fn ctor, const char *name)
+/* expected_baseline: rb_malloc calls one unarmed scenario makes with ctor;
+ * each implementation (plain, pooled) passes its own number. */
+static void sweep(tree_ctor_fn ctor, const char *name, long expected_baseline)
 {
 	scen_result_t r;
 
@@ -205,6 +207,9 @@ static void sweep(tree_ctor_fn ctor, const char *name)
 	run_scenario(ctor, &r);
 	long baseline = fault_alloc_total() - before;
 	CHECK(r.create_failed == 0 && r.insert_failed == 0);
+	/* pins the allocation profile: an extra or missing rb_malloc call in
+	 * src/ changes this before it can hide from the sweep */
+	CHECK(baseline == expected_baseline);
 
 	/* injected = number of k with ran >= k, i.e. the k-th call happened */
 	long injected = 0;
@@ -242,12 +247,20 @@ static void sweep(tree_ctor_fn ctor, const char *name)
 			"rb_malloc yet\n", name);
 	}
 	CHECK(create_failures >= 1 && insert_failures >= 1);
+	/* every one of the baseline allocation points was reached and failed */
+	CHECK(injected == baseline);
+	/* only the scenario's first rb_malloc belongs to the constructor */
+	CHECK(create_failures == 1);
+	/* the rest are node + key copy for each of the N_KEYS fresh inserts;
+	 * overwrites and deletes allocate nothing */
+	CHECK(insert_failures == 2 * N_KEYS);
 }
 
 int main(void)
 {
 	build_keys();
-	sweep(rb_create, "rb_create");
+	/* one tree, plus a node and a key copy per fresh insert: 1 + 2 * 200 */
+	sweep(rb_create, "rb_create", 1 + 2 * N_KEYS);
 	printf("All fault sweeps passed\n");
 	return 0;
 }
