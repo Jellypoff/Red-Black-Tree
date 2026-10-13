@@ -44,7 +44,7 @@ Notes: The review found 2 real bugs and a false positive.
 Episode 4
 Prompt: Implement only the M2 slice "slab carving + intrusive free list, O(1) alloc/free", tests first. Touch only src/pool.c, src/pool.h, and tests/test_pool.c. Do not touch src/rbtree.c, include/rbtree.h, or the tree tests. No poisoning yet (that is the next slice).
 
-Read only src/pool.h, src/pool.c, tests/test_pool.c, tests/fault_alloc.h, and the M2 decisions in DEVLOG.md (alignment, in-band header, free_objs definition).
+Read only src/pool.h, src/pool.c, tests/test_pool.c, tests/fault_alloc.h.
 
 Notes: This is slice 2 of M2. Telling Claude where to look is very useful for conserving tokens and at this point Claude it seems that Claude knows to build on the foundations that I've layed and just need to give it clarifying questions.
 
@@ -57,3 +57,27 @@ Approve with two additions:
 1. Add a second poison test case where the stride exceeds obj_size (pool_create(1) gives stride 16; also try pool_create(20), stride 32; read the stride from pool_geometry). After pool_free, bytes [sizeof(void *), stride) must all be 0xDD. Add a third mutation check: poison fewer bytes than the stride, and show the new test fails.
 2. Verify the -DNDEBUG claim once with a one-off build in the WSL copy : show that it compiles under -Wall -Wextra -Werror and the pool tests pass.
 Otherwise proceed as planned. Show the diff and stop. Don't commit, I'll do that.
+
+Episode 6
+Prompt:Implement the M2 slice: rb_create_pooled unwinds on slab failure; sweep green on pooled build. Touch only src/rbtree.c, src/pool.h, tests/test_fault.c, tests/test_rbtree.c, tests/fuzz.c, and the Makefile. Do not touch include/rbtree.h. Smallest diff.
+STEP 0 no edits yet, wait for my approval. give a short design covering:
+- where the pool pointer lives in struct rbtree, and node_alloc(t)/node_release(t, node) helpers used by rb_insert, rb_delete, free_subtree and rb_destroy, so there is no duplicated pooled/plain logic
+- rb_create_pooled's allocation order and exact unwind if pool_create fails
+- how rb_destroy handles pooled trees , and that rb_destroy stays safe
+- rb_insert's failure paths in pooled mode, including that a failed key copy returns the node to the pool via node_release
+- the pooled sweep's expected baseline as a formula you derive yourself from sizeof(rbnode_t), the pool geometry, and the scenario. I expect 205 (injected=205, create_failures=2, insert_failures=203); tell me if you get something different.
+
+AFTER I approve, tests first:
+1. In tests/test_fault.c, pass the expected counts into the sweep as parameters instead of hardcoding them, and add the pooled sweep next to the plain one. Show it failing before implementing.
+2. Add a test only accessor (private header, not include/rbtree.h) for the tree's pool_stats. In the pooled sweep, CHECK live == rb_size(t) and live + free_objs == slabs * objs_per_slab after every successful op and every failed insert
+3. Run the A1 unit tests and the fuzzer against both rb_create and rb_create_pooled 
+4. Implement. No malloc/free in src/. rb_insert still allocates everything before its first tree-modifying line.
+5. From ~/rbtree-lab (rsync from /mnt/c, strip CRLF, recheck): make clean && make test, make clean && make asan, make clean && make memcheck. Summary lines only, plus both sweep summary lines and the valgrind time for test_fault.
+Notes: I ran this in a fresh session and the first thing I saw from Claudes plan was that the diff was very big. It touched six files and over 100 lines. The plan also wanted to put the accessor in pool.h. I wanted to use a small rbtree_internal.h. Claude was also going to hardcode the 3 slabs silently. I decided to split this slice up into 2 smaller slices, with the pushback message being:
+Approve with changes:
+1. Split into two slices and stop after each for my review. (a) rbtree.c + accessor + test_fault.c + dependency line: pooled sweep. (b) test_rbtree.c + fuzz.c + Makefile fuzz lines: A1 suite and fuzzer on the pooled build.
+2. Put the accessor in a new src/rbtree_internal.h, not pool.h.
+3. In the pooled sweep, CHECK objs_per_slab == 85 and compute expected slabs as ceil(N_KEYS / objs_per_slab), so a different layout fails with a clear message.
+4. Don't fold in the fuzz seed pin or the memcheck-clean fix if those are separate commits; tell me if they are still pending.
+Start with slice (a). Show the diff and the pooled sweep line (expect baseline=205 injected=205 create_failures=2 insert_failures=203), and stop.
+After this pushback, the split up slices went well and went in two different commits.
