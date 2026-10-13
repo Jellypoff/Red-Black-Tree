@@ -102,6 +102,31 @@ int rb_tree_pool_stats(const rbtree_t *t, size_t *slabs, size_t *live,
 	return 0;
 }
 
+/* Test-only and recursive on purpose: it observes the tree, it is not one of
+ * the O(1)-space operations. Recursion depth is bounded by cap because each
+ * call records a node first and stops once more than cap are seen. */
+static void shape_rec(const rbtree_t *t, const rbnode_t *node,
+		      rb_node_shape_t *out, size_t cap, size_t *count)
+{
+	if (node == &t->nil || node == NULL || *count > cap) {
+		return;
+	}
+	if (*count < cap) {
+		out[*count] = (rb_node_shape_t){ node, node->left, node->right,
+						 node->parent, node->key };
+	}
+	(*count)++;
+	shape_rec(t, node->left, out, cap, count);
+	shape_rec(t, node->right, out, cap, count);
+}
+
+size_t rb_tree_shape(const rbtree_t *t, rb_node_shape_t *out, size_t cap)
+{
+	size_t count = 0;
+	shape_rec(t, t->root, out, cap, &count);
+	return count;
+}
+
 static void rb_rotate_left(rbtree_t *t, rbnode_t *x)
 {
 	rbnode_t *y = x->right;
@@ -439,22 +464,64 @@ int rb_validate(const rbtree_t *t)
 	return rb_validate_rec(t, t->root, NULL, NULL, &black_height) ? 0 : 1;
 }
 
-static void rb_foreach_rec(const rbtree_t *t, const rbnode_t *node,
-			    void (*fn)(const char *key, void *value, void *ctx),
-			    void *ctx)
-{
-	if (node == &t->nil) {
-		return;
-	}
-	rb_foreach_rec(t, node->left, fn, ctx);
-	fn(node->key, node->value, ctx);
-	rb_foreach_rec(t, node->right, fn, ctx);
-}
-
+/* Morris in-order traversal: no recursion, no allocation, O(1) auxiliary
+ * space (cur, pred). It temporarily threads right pointers, so the const in
+ * the signature is logical, not physical: the tree is unchanged when
+ * rb_foreach returns, but not while fn runs.
+ *
+ * Callback contract: fn may read key and read or modify *value. fn must not
+ * call any rb_* function on this tree (insert, delete, destroy, or even
+ * rb_find: a search for an absent key can follow a thread back up to an
+ * ancestor and loop forever). A callback that never returns (longjmp, exit)
+ * leaves threads in place; that is unsupported. */
 void rb_foreach(const rbtree_t *t, void (*fn)(const char *key, void *value, void *ctx),
 		 void *ctx)
 {
-	rb_foreach_rec(t, t->root, fn, ctx);
+	/* Restoring a thread stores &t->nil into a node. Casting away const is
+	 * legal: the tree is heap-allocated (not a const object), and nil itself
+	 * is never written through this pointer. */
+	rbnode_t *nil = (rbnode_t *)&t->nil;
+	rbnode_t *cur = t->root;
+	/* Invariant (top of each iteration):
+	 * 1. fn has been called exactly once, in order, on every node that
+	 *    precedes cur's subtree in in-order order, plus all of cur's left
+	 *    subtree if cur's thread exists (cur was reached through it), and on
+	 *    no other node.
+	 * 2. The tree differs from its original shape only by temporary threads:
+	 *    a thread is a right pointer of a predecessor P pointing back up at a
+	 *    node X (P->right == X, where P is X's in-order predecessor). A thread
+	 *    exists for X exactly when X has a non-nil left child and either cur
+	 *    lies in X's original left subtree (it is being traversed) or
+	 *    cur == X (it has just finished; X was reached through the thread).
+	 *    Every other pointer is original.
+	 * Termination: each node becomes cur at most twice (once when its thread
+	 * is made, once when the thread is found and removed). Each predecessor
+	 * scan only walks a right spine, and every edge on that spine is crossed
+	 * at most twice across the whole walk, so the total work is O(N). The
+	 * loop exits only by stepping right off the in-order maximum, which lies
+	 * in no ancestor's left subtree, so by clause 2 no thread remains on
+	 * return and the tree is exactly as it was. */
+	while (cur != nil) {
+		if (cur->left == nil) {
+			fn(cur->key, cur->value, ctx);
+			cur = cur->right;
+			continue;
+		}
+		rbnode_t *pred = cur->left;
+		/* pred walks the right spine of cur's left subtree; it stops at the
+		 * rightmost node, or at the one already threaded back to cur */
+		while (pred->right != nil && pred->right != cur) {
+			pred = pred->right;
+		}
+		if (pred->right == nil) {
+			pred->right = cur; /* make the thread, then do the left subtree */
+			cur = cur->left;
+		} else {
+			pred->right = nil; /* left subtree done: remove the thread */
+			fn(cur->key, cur->value, ctx);
+			cur = cur->right;
+		}
+	}
 }
 
 /* Right-spine teardown (spec Figure 5): no recursion, no allocation, O(1)

@@ -1,5 +1,6 @@
-/* M3: rb_destroy of a large tree inside a thread with a 64 KB stack.
- * Usage: test_teardown [N]   (default 1000000; memcheck passes a smaller N)
+/* M3: rb_foreach then rb_destroy of a large tree inside a thread with a
+ * 64 KB stack.
+ * Usage: test_teardown [N]   (default 1000000; test, asan, memcheck all use it)
  * Passing this does not prove the absence of recursion (an RB tree of 10^6
  * nodes is ~40 levels deep); the code does. It proves teardown survives a
  * kernel-sized stack at scale with every node, key copy, and value released. */
@@ -9,6 +10,7 @@
 #include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <string.h>
 
 #define SMALL_STACK 65536
 #define KEY_STRIDE 7919 /* prime: visits keys out of order when N % 7919 != 0 */
@@ -31,8 +33,27 @@ static void count_value_free(void *value)
 	values_freed++;
 }
 
-static void *destroy_thread(void *arg)
+typedef struct {
+	size_t visited;
+	char prev[32]; /* last key seen; keys must arrive strictly increasing */
+} walk_ctx_t;
+
+static void walk_cb(const char *key, void *value, void *ctx)
 {
+	walk_ctx_t *w = ctx;
+	CHECK(value == &dummy_value);
+	CHECK(w->visited == 0 || strcmp(w->prev, key) < 0);
+	snprintf(w->prev, sizeof w->prev, "%s", key);
+	w->visited++;
+}
+
+static walk_ctx_t walk;
+
+/* Runs on the 64 KB stack: a full rb_foreach, then rb_destroy. */
+static void *small_stack_thread(void *arg)
+{
+	walk.visited = 0;
+	rb_foreach(arg, walk_cb, &walk);
 	rb_destroy(arg);
 	return NULL;
 }
@@ -56,13 +77,15 @@ static void run(const char *name, rbtree_t *(*ctor)(rb_value_free_fn), size_t n)
 	CHECK(pthread_attr_init(&attr) == 0);
 	CHECK(pthread_attr_setstacksize(&attr, SMALL_STACK) == 0);
 	values_freed = 0;
-	CHECK(pthread_create(&tid, &attr, destroy_thread, t) == 0);
+	CHECK(pthread_create(&tid, &attr, small_stack_thread, t) == 0);
 	CHECK(pthread_join(tid, NULL) == 0);
 	pthread_attr_destroy(&attr);
 
+	CHECK(walk.visited == n);
 	CHECK(values_freed == n);
 	CHECK(fault_alloc_live() == live_before);
-	printf("teardown: ctor=%s N=%zu stack=%d ok\n", name, n, SMALL_STACK);
+	printf("teardown: ctor=%s N=%zu stack=%d foreach+destroy ok\n", name, n,
+	       SMALL_STACK);
 }
 
 int main(int argc, char **argv)

@@ -1,6 +1,8 @@
 #include "rbtree.h"
+#include "rbtree_internal.h"
 
 #include <assert.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -354,6 +356,182 @@ static void test_foreach_values(void)
 	printf("test_foreach_values passed\n");
 }
 
+/* M3 tests share one deep-enough tree: SHAPE_KEYS keys "k000".."k199",
+ * inserted in a scrambled order (37 is coprime to 200). */
+#define SHAPE_KEYS 200
+
+static void insert_scrambled(rbtree_t *t)
+{
+	char key[16];
+	for (int i = 0; i < SHAPE_KEYS; i++) {
+		int k = (i * 37) % SHAPE_KEYS;
+		snprintf(key, sizeof key, "k%03d", k);
+		assert(rb_insert(t, key, make_int(k)) == 0);
+	}
+}
+
+typedef struct {
+	uintptr_t first; /* address of the callback's local on the first call */
+	int calls;
+	int mismatches;
+} stack_addr_ctx_t;
+
+/* Exempt from ASan: its fake stacks give every call's locals a fresh
+ * address, which would fail this check for reasons unrelated to rb_foreach.
+ * noinline keeps marker in this function's own frame. */
+__attribute__((no_sanitize_address, noinline))
+static void stack_addr_cb(const char *key, void *value, void *ctx)
+{
+	(void)key;
+	(void)value;
+	volatile char marker = 0;
+	stack_addr_ctx_t *c = ctx;
+	uintptr_t here = (uintptr_t)&marker;
+	if (c->calls++ == 0) {
+		c->first = here;
+	} else if (here != c->first) {
+		c->mismatches++;
+	}
+}
+
+/* A non-recursive rb_foreach calls fn from one frame, so a local in fn sits
+ * at the same address on every call; a recursive one calls it from frames
+ * at different depths. */
+static void test_foreach_constant_stack(void)
+{
+	rbtree_t *t = make_tree(count_free);
+	assert(t != NULL);
+	insert_scrambled(t);
+
+	stack_addr_ctx_t ctx = { 0 };
+	rb_foreach(t, stack_addr_cb, &ctx);
+	assert(ctx.calls == SHAPE_KEYS);
+	assert(ctx.mismatches == 0);
+
+	rb_destroy(t);
+	printf("test_foreach_constant_stack passed\n");
+}
+
+#define SHAPE_CAP 256
+
+typedef struct {
+	const char *keys[SHAPE_CAP];
+	int count;
+} foreach_many_ctx_t;
+
+static void collect_many_cb(const char *key, void *value, void *ctx)
+{
+	(void)value;
+	foreach_many_ctx_t *c = ctx;
+	assert(c->count < SHAPE_CAP);
+	c->keys[c->count++] = key;
+}
+
+/* Morris restoration check. The shape compare runs first, straight after one
+ * rb_foreach, so a leftover thread or a NULL link fails here instead of
+ * crashing a later walk. */
+static void check_foreach_restores(rbtree_t *t)
+{
+	static rb_node_shape_t before[SHAPE_CAP], after[SHAPE_CAP];
+	size_t n = rb_size(t);
+	size_t nb = rb_tree_shape(t, before, SHAPE_CAP);
+	assert(nb == n);
+
+	int count = 0;
+	rb_foreach(t, count_keys_cb, &count);
+	size_t na = rb_tree_shape(t, after, SHAPE_CAP);
+	assert(na == nb && memcmp(before, after, nb * sizeof before[0]) == 0);
+	assert((size_t)count == n);
+
+	static foreach_many_ctx_t w1, w2;
+	w1.count = 0;
+	w2.count = 0;
+	rb_foreach(t, collect_many_cb, &w1);
+	rb_foreach(t, collect_many_cb, &w2);
+	assert(w1.count == w2.count && (size_t)w1.count == n);
+	/* invariant: walks agree on keys [0, i) and those keys are increasing */
+	for (int i = 0; i < w1.count; i++) {
+		assert(strcmp(w1.keys[i], w2.keys[i]) == 0);
+		assert(i == 0 || strcmp(w1.keys[i - 1], w1.keys[i]) < 0);
+	}
+
+	assert(rb_validate(t) == 0);
+	assert(rb_size(t) == n);
+	for (int i = 0; i < w1.count; i++) {
+		assert(rb_find(t, w1.keys[i]) != NULL);
+	}
+	assert(rb_find(t, "absent") == NULL);
+}
+
+static void test_foreach_restores_tree(void)
+{
+	rbtree_t *t = make_tree(count_free);
+	assert(t != NULL);
+	check_foreach_restores(t); /* empty */
+	assert(rb_insert(t, "only", make_int(1)) == 0);
+	check_foreach_restores(t); /* one node */
+	rb_destroy(t);
+
+	t = make_tree(count_free);
+	assert(t != NULL);
+	insert_scrambled(t);
+	check_foreach_restores(t);
+	rb_destroy(t);
+
+	t = make_tree(count_free);
+	assert(t != NULL);
+	char key[16];
+	for (int i = 0; i < SHAPE_KEYS; i++) {
+		snprintf(key, sizeof key, "k%03d", i);
+		assert(rb_insert(t, key, make_int(i)) == 0);
+	}
+	check_foreach_restores(t); /* ascending inserts */
+	rb_destroy(t);
+
+	t = make_tree(count_free);
+	assert(t != NULL);
+	insert_scrambled(t);
+	for (int i = 0; i < SHAPE_KEYS; i += 3) {
+		snprintf(key, sizeof key, "k%03d", i);
+		assert(rb_delete(t, key) == 0);
+	}
+	static rb_node_shape_t root_probe[SHAPE_CAP];
+	assert(rb_tree_shape(t, root_probe, SHAPE_CAP) == rb_size(t));
+	snprintf(key, sizeof key, "%s", root_probe[0].key); /* preorder: root first */
+	assert(rb_delete(t, key) == 0);
+	assert(rb_validate(t) == 0);
+	check_foreach_restores(t); /* after deletes, including the root */
+	rb_destroy(t);
+
+	printf("test_foreach_restores_tree passed\n");
+}
+
+static void bump_value_cb(const char *key, void *value, void *ctx)
+{
+	(void)key;
+	(void)ctx;
+	(*(int *)value)++;
+}
+
+/* Contract: the callback may modify *value (but not call rb_* on the tree). */
+static void test_foreach_callback_may_write_value(void)
+{
+	rbtree_t *t = make_tree(count_free);
+	assert(t != NULL);
+	insert_scrambled(t);
+
+	rb_foreach(t, bump_value_cb, NULL);
+	char key[16];
+	for (int i = 0; i < SHAPE_KEYS; i++) {
+		snprintf(key, sizeof key, "k%03d", i);
+		int *v = rb_find(t, key);
+		assert(v != NULL && *v == i + 1);
+	}
+
+	rb_destroy(t);
+	printf("test_foreach_callback_may_write_value passed\n");
+}
+
 typedef struct {
 	const char *name;
 	const char *insert_order[8];
@@ -541,6 +719,9 @@ static void run_suite(const char *ctor_name)
 	test_foreach_empty();
 	test_foreach_inorder();
 	test_foreach_values();
+	test_foreach_constant_stack();
+	test_foreach_restores_tree();
+	test_foreach_callback_may_write_value();
 	test_delete_cases();
 	test_delete_empty_tree();
 	test_find_empty_tree();
