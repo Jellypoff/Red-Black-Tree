@@ -6,7 +6,8 @@ BIN := build/test_rbtree
 FUZZBIN := build/fuzz
 FAULTBIN := build/test_fault
 POOLBIN := build/test_pool
-all: $(BIN) $(FUZZBIN) $(FAULTBIN) $(POOLBIN)
+TEARDOWNBIN := build/test_teardown
+all: $(BIN) $(FUZZBIN) $(FAULTBIN) $(POOLBIN) $(TEARDOWNBIN)
 $(BIN): $(SRC) $(TSRC) include/rbtree.h tests/fault_alloc.h src/pool.h src/rbtree_internal.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SRC) $(TSRC) -o $@ -lpthread
@@ -19,10 +20,13 @@ $(FAULTBIN): $(SRC) tests/test_fault.c tests/fault_alloc.c include/rbtree.h test
 $(POOLBIN): $(SRC) tests/test_pool.c tests/fault_alloc.c include/rbtree.h tests/fault_alloc.h src/pool.h
 	@mkdir -p build
 	$(CC) $(CFLAGS) $(SRC) tests/test_pool.c tests/fault_alloc.c -o $@ -lpthread
+$(TEARDOWNBIN): $(SRC) tests/test_teardown.c tests/fault_alloc.c include/rbtree.h tests/fault_alloc.h src/pool.h
+	@mkdir -p build
+	$(CC) $(CFLAGS) $(SRC) tests/test_teardown.c tests/fault_alloc.c -o $@ -lpthread
 fault: $(FAULTBIN)
 	./$(FAULTBIN)
-test: $(BIN) $(FUZZBIN) $(FAULTBIN) $(POOLBIN)
-	./$(BIN) && ./$(FUZZBIN) 100000 12345 && ./$(FUZZBIN) 100000 12345 pooled && ./$(FAULTBIN) && ./$(POOLBIN)
+test: $(BIN) $(FUZZBIN) $(FAULTBIN) $(POOLBIN) $(TEARDOWNBIN)
+	./$(BIN) && ./$(FUZZBIN) 100000 12345 && ./$(FUZZBIN) 100000 12345 pooled && ./$(FAULTBIN) && ./$(POOLBIN) && ./$(TEARDOWNBIN) 1000000
 asan: CFLAGS += -fsanitize=address,undefined -fno-omit-frame-pointer
 asan: clean test
 memcheck:
@@ -38,6 +42,8 @@ memcheck:
 	--error-exitcode=1 ./$(FAULTBIN)
 	valgrind --leak-check=full --show-leak-kinds=all \
 	--error-exitcode=1 ./$(POOLBIN)
+	valgrind --leak-check=full --show-leak-kinds=all \
+	--error-exitcode=1 ./$(TEARDOWNBIN) 1000000
 clean:
 	rm -rf build
 .PHONY: all test asan memcheck fault clean

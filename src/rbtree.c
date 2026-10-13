@@ -457,26 +457,41 @@ void rb_foreach(const rbtree_t *t, void (*fn)(const char *key, void *value, void
 	rb_foreach_rec(t, t->root, fn, ctx);
 }
 
-static void free_subtree(rbtree_t *t, rbnode_t *node)
-{
-	if (node == &t->nil) {
-		return;
-	}
-	free_subtree(t, node->left);
-	free_subtree(t, node->right);
-	if (t->value_free != NULL && node->value != NULL) {
-		t->value_free(node->value);
-	}
-	rb_free(node->key);
-	node_release(t, node);
-}
-
+/* Right-spine teardown (spec Figure 5): no recursion, no allocation, O(1)
+ * auxiliary space (n, l, next). Colors and parent pointers are ignored; the
+ * tree stops being a red-black tree on the first rotation. &t->nil is never
+ * written: rotation only runs when n->left is a real node, and n is real. */
 void rb_destroy(rbtree_t *t)
 {
 	if (t == NULL) {
 		return;
 	}
-	free_subtree(t, t->root);
+	rbnode_t *n = t->root;
+	/* Invariant: the nodes not yet freed are exactly the nodes of the
+	 * left/right subtree rooted at n, each reachable by one path; every
+	 * freed node's key copy and (owned) value were released with it.
+	 * Termination measure: M = (nodes not yet freed) + (nodes off the right
+	 * spine from n, i.e. in the left subtree of some spine node). M >= 0 and
+	 * drops by exactly 1 per iteration: a rotation lifts l onto the spine
+	 * (off-spine -1, nothing freed); a free removes n, which has no left
+	 * subtree (remaining -1, off-spine unchanged). M = 0 iff n == &t->nil,
+	 * so the loop runs at most 2N - 1 times. */
+	while (n != &t->nil) {
+		if (n->left != &t->nil) {
+			rbnode_t *l = n->left; /* right-rotate at n */
+			n->left = l->right;
+			l->right = n;
+			n = l;
+		} else {
+			rbnode_t *next = n->right; /* saved before n is freed */
+			if (t->value_free != NULL && n->value != NULL) {
+				t->value_free(n->value);
+			}
+			rb_free(n->key);
+			node_release(t, n);
+			n = next;
+		}
+	}
 	pool_destroy(t->pool); /* NULL-safe: plain trees have no pool */
 	rb_free(t);
 }
