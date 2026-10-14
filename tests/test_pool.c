@@ -271,6 +271,25 @@ static void test_stress_and_destroy_live(void)
 		CHECK(after.live == before.live + 1);
 	}
 
+	/* Every live object gets its own index in every word: a slot handed
+	 * out twice (reused or not) is overwritten by its later owner. The
+	 * counters cannot show this; a double push keeps them consistent. */
+	enum { WORDS = OBJ / sizeof(size_t) };
+	for (size_t i = 0; i < N_STRESS + N_REFILL; i++) {
+		size_t *w = objs[i];
+		/* invariant: words [0, k) of objs[i] hold i */
+		for (size_t k = 0; w != NULL && k < WORDS; k++) {
+			w[k] = i;
+		}
+	}
+	/* invariant: every live object below i still holds only its index */
+	for (size_t i = 0; i < N_STRESS + N_REFILL; i++) {
+		const size_t *w = objs[i];
+		for (size_t k = 0; w != NULL && k < WORDS; k++) {
+			CHECK(w[k] == i);
+		}
+	}
+
 	stats_t s = check_inv(p);
 	CHECK(s.live == N_STRESS - (N_STRESS + 2) / 3 + N_REFILL);
 	pool_destroy(p); /* objects still live: every slab must go anyway */
