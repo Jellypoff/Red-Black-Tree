@@ -3,11 +3,14 @@
 #include "fault_alloc.h"
 #include "pool.h"
 
+#include <signal.h>
 #include <stddef.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/wait.h>
+#include <unistd.h>
 
 /* Always-on check: unlike assert(), -DNDEBUG cannot disable it. Never put
  * side effects inside; capture results first. */
@@ -434,6 +437,72 @@ static void test_poison_stride_padding(void)
 	printf("test_poison_stride_padding passed\n");
 }
 
+#ifndef NDEBUG
+/* Debug-build misuse checks. Each bad sequence runs in a forked child,
+ * which must die by SIGABRT from a pool assert; the child's assert message
+ * on stderr names the check that fired. */
+static void expect_abort(const char *name, void (*bad)(void))
+{
+	fflush(stdout);
+	fflush(stderr);
+	pid_t pid = fork();
+	CHECK(pid >= 0);
+	if (pid == 0) {
+		bad();
+		_exit(0); /* reached only if no check fired */
+	}
+	int status;
+	CHECK(waitpid(pid, &status, 0) == pid);
+	CHECK(WIFSIGNALED(status) && WTERMSIG(status) == SIGABRT);
+	printf("death test %s: child aborted as expected\n", name);
+}
+
+/* live == 0: nothing can be freed, so this free is a double or foreign one */
+static void bad_free_when_none_live(void)
+{
+	rb_pool_t *p = pool_create(OBJ);
+	CHECK(p != NULL);
+	void *a = pool_alloc(p);
+	CHECK(a != NULL);
+	pool_free(p, a);
+	pool_free(p, a);
+}
+
+/* the freed slot is still the free-list head; pushing it again would make
+ * a self-loop and hand the same slot to every later alloc */
+static void bad_double_free_head(void)
+{
+	rb_pool_t *p = pool_create(OBJ);
+	CHECK(p != NULL);
+	void *a = pool_alloc(p);
+	void *b = pool_alloc(p);
+	CHECK(a != NULL && b != NULL);
+	pool_free(p, a);
+	pool_free(p, a);
+}
+
+/* a stale pointer writes into a dead slot past the link; the next alloc
+ * that pops the slot must notice the poison is gone */
+static void bad_write_after_free(void)
+{
+	rb_pool_t *p = pool_create(OBJ);
+	CHECK(p != NULL);
+	void *a = pool_alloc(p);
+	CHECK(a != NULL);
+	pool_free(p, a);
+	((unsigned char *)a)[sizeof(void *)] = 0x11;
+	(void)pool_alloc(p);
+}
+
+static void test_misuse_aborts(void)
+{
+	expect_abort("free_when_none_live", bad_free_when_none_live);
+	expect_abort("double_free_head", bad_double_free_head);
+	expect_abort("write_after_free", bad_write_after_free);
+	printf("test_misuse_aborts passed\n");
+}
+#endif
+
 int main(void)
 {
 	test_geometry();
@@ -445,6 +514,9 @@ int main(void)
 	test_slab_failure();
 	test_poison_on_free();
 	test_poison_stride_padding();
+#ifndef NDEBUG
+	test_misuse_aborts();
+#endif
 	printf("All pool tests passed\n");
 	return 0;
 }

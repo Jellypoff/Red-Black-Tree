@@ -121,9 +121,28 @@ static void freelist_push(rb_pool_t *p, void *obj)
 	p->nfree++;
 }
 
+#ifndef NDEBUG
+/* A dead slot is the link plus poison. A byte past the link that is not
+ * poison was written through a stale pointer after the free. O(stride). */
+static int poison_intact(const rb_pool_t *p, const void *slot)
+{
+	const unsigned char *b = slot;
+	/* invariant: bytes [sizeof(void *), i) are all poison */
+	for (size_t i = sizeof(void *); i < p->g.stride; i++) {
+		if (b[i] != POOL_POISON_BYTE) {
+			return 0;
+		}
+	}
+	return 1;
+}
+#endif
+
 static void *freelist_pop(rb_pool_t *p)
 {
 	struct free_slot *s = p->free;
+#ifndef NDEBUG
+	assert(poison_intact(p, s)); /* write-after-free into this slot */
+#endif
 	p->free = s->next;
 	p->nfree--;
 	return s;
@@ -190,6 +209,14 @@ void pool_free(rb_pool_t *p, void *obj)
 	if (obj == NULL) {
 		return;
 	}
+#ifndef NDEBUG
+	/* Cheap O(1) misuse checks; pool_check cannot catch these, because a
+	 * free keeps live + free_objs unchanged even when live wraps. Only a
+	 * double free of the current free-list head is caught; one deeper in
+	 * the list would need an O(n) walk. */
+	assert(p->live > 0);      /* nothing is live: double or foreign free */
+	assert(obj != p->free);   /* double free of the free-list head */
+#endif
 	freelist_push(p, obj);
 	p->live--;
 	pool_check(p);
