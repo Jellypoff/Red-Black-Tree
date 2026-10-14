@@ -81,3 +81,14 @@ Approve with changes:
 4. Don't fold in the fuzz seed pin or the memcheck-clean fix if those are separate commits; tell me if they are still pending.
 Start with slice (a). Show the diff and the pooled sweep line (expect baseline=205 injected=205 create_failures=2 insert_failures=203), and stop.
 After this pushback, the split up slices went well and went in two different commits.
+
+Episode 7
+Adversarial review after finishing M0-M3
+Prompt:
+Review the M2 and M3 diff  as a hostile kernel reviewer. Plan mode: do not edit or fix anything.
+Read src/pool.c, src/pool.h, src/rbtree.c, src/rbtree_internal.h, and tests/ only as needed to judge whether a test is vacuous.
+
+Notes:
+Real finding: rb_destroy recursion is invisible to the tests. test_teardown at 10^6 nodes passes on the old recursive free_subtree too, because a red-black tree that size is only ~40 levels deep. Fix: a destructor that records its frame address, checkeded equal across calls for rb_destroy on both constructors.
+
+False positive: "a failed insert can grow the pool, so call dup_key first." After a failed key copy the node goes back to the free list and the tree, size and values are unchanged; the header promises only an unchanged tree. Leaving the slab in the pool was a deliberate M2 decision, and the invariant is checked after every failed insert. The reorder would also change the allocation sequence that the sweep baselines pin down.
