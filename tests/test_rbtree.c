@@ -412,6 +412,33 @@ static void test_foreach_constant_stack(void)
 	printf("test_foreach_constant_stack passed\n");
 }
 
+/* value_free gets no ctx, so the destroy probe records here. */
+static stack_addr_ctx_t destroy_probe;
+
+/* Same frame-address probe as stack_addr_cb, as a value destructor. */
+__attribute__((no_sanitize_address, noinline))
+static void stack_addr_free(void *value)
+{
+	stack_addr_cb(NULL, NULL, &destroy_probe);
+	free(value);
+}
+
+/* rb_destroy calls value_free from its loop's frame on a non-recursive
+ * teardown, but from frames at different depths on a recursive one. Depth
+ * alone cannot show this: a 10^6-node tree is only ~40 levels deep. */
+static void test_destroy_constant_stack(void)
+{
+	rbtree_t *t = make_tree(stack_addr_free);
+	assert(t != NULL);
+	insert_scrambled(t);
+
+	destroy_probe = (stack_addr_ctx_t){ 0 };
+	rb_destroy(t);
+	assert(destroy_probe.calls == SHAPE_KEYS);
+	assert(destroy_probe.mismatches == 0);
+	printf("test_destroy_constant_stack passed\n");
+}
+
 #define SHAPE_CAP 256
 
 typedef struct {
@@ -720,6 +747,7 @@ static void run_suite(const char *ctor_name)
 	test_foreach_inorder();
 	test_foreach_values();
 	test_foreach_constant_stack();
+	test_destroy_constant_stack();
 	test_foreach_restores_tree();
 	test_foreach_callback_may_write_value();
 	test_delete_cases();
